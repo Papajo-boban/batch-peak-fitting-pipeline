@@ -1,0 +1,45 @@
+datasets:
+# === Dataset 1 ===
+- input_path : "sh1_0002_0001.h5"
+  output_path : "./outputs/new5"
+  fitting_model : "pseudo_voigt"
+  aspect_ratio : 226/901
+
+  roi_list:
+    - name: Ara_111
+      peak: 16.5
+      half_width: 0.3
+
+  enable_diagnostics: False
+  single_point_index: 311
+  visuals: False
+  extra_pure_image: False
+
+
+
+
+# datasets:
+#   - input_path: "<path/to/input_file>.h5"           # Path to HDF5 input file
+#     output_path: "<path/to/output_directory>"       # Directory to save results
+#     fitting_model: "<gaussian | pseudo_voigt>"      # Choose fitting model
+#     aspect_ratio: "<width>/<height>"                # e.g. "1001/301"
+    
+#     roi_list:
+#       - name: "<ROI_label_1>"                       # Unique label for this ROI
+#         peak: <center_q_value>                      # Central q-value of the peak
+#         half_width: <half_range_q>                  # Half-width for ROI in q-space, ensure enough range (gaussian: half_width>0.135, pseudo_voigt: half_width>0.09)
+#       # - name: "<ROI_label_2>"                     # You can add more ROIs
+#       #   peak: <center_q_value>
+#       #   half_width: <half_range_q>
+
+#     single_point_mode: <true | false>               # If true, fits a single mesh point
+#     single_point_index: <mesh_index>                # Index of the point to fit if single_point_mode is true
+#     visuals: <true | false>                         # Generate average intensity plots
+#     extra_pure_image: <true | false>                # Output images without axes/ticks
+
+#     """
+# #The range must be wide enough to capture a sufficient number of data points (M)
+# # to solve for the model's parameters (N). If the range is too narrow, you will
+# # encounter a "TypeError: ... N must not exceed M=..." because there is not
+# # enough data to perform a meaningful fit.
+# """
