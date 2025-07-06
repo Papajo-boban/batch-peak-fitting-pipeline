@@ -1,14 +1,15 @@
 # Batch Peak Fitting Pipeline
 This repository provides a Python pipeline for performing batch peak fitting (Gaussian or Pseudo-Voigt) on 2D mesh spectral data stored in HDF5 format. It is optimized for parallel computation using `joblib` and outputs both processed data and diagnostic plots.
 
-
 ## Directory Structure
+```
 ├── outputs/                 # for generated PNGs and fitted HDF5 file
 ├── src/                     
 │ └── peak_fit_pipeline.py   # Main executable script
 ├── config.yaml              # Configuration file for datasets and input parameters
 ├── README.md                # This documentation file
 ├── requirements.txt         # Python dependencies
+```
 
 ---
 
