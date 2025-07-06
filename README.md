@@ -1,6 +1,3 @@
-# xray-fitting-pipeline
-Modular peak-fitting pipeline for SAXS/WAXS data with YAML config and image outputs.
-
 # Batch Peak Fitting Pipeline
 This repository provides a Python pipeline for performing batch peak fitting (Gaussian or Pseudo-Voigt) on 2D mesh spectral data stored in HDF5 format. It is optimized for parallel computation using `joblib` and outputs both processed data and diagnostic plots.
 
