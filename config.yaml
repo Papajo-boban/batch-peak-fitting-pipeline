@@ -1,24 +1,41 @@
 datasets:
 # === Dataset 1 ===
 - input_path : "sh1_0002_0001.h5"
-  output_path : "./outputs/new5"
+  output_path : "./outputs/a"
+  fitting_model : "gaussian"
+  aspect_ratio : 226/901
+
+  roi_list:
+    - name: Ara_111
+      peak: 1.5
+      half_width: 0.3
+    - name: Ara_023
+      peak: 18.7
+      half_width: 0.25
+  save_diagnostics: False                     
+  diagnostic_point_index: 1000                
+  save_interactive_scattering_plot: False     
+  save_extra_clean_param_maps: False           
+
+# === Dataset 1 ===
+- input_path : "sh1_0002_0001.h5"
+  output_path : "./outputs/b"
   fitting_model : "pseudo_voigt"
   aspect_ratio : 226/901
 
   roi_list:
     - name: Ara_111
-      peak: 16.5
+      peak: 1.5
       half_width: 0.3
+    # - name: Ara_023
+    #   peak: 18.7
+    #   half_width: 0.25
+  save_diagnostics: False                     
+  diagnostic_point_index: 1000                
+  save_interactive_scattering_plot: False     
+  save_extra_clean_param_maps: False   
 
-  enable_diagnostics: False
-  single_point_index: 311
-  visuals: False
-  extra_pure_image: False
-
-
-
-
-# datasets:
+# ==TEMPLATE FOR DATASET==
 #   - input_path: "<path/to/input_file>.h5"           # Path to HDF5 input file
 #     output_path: "<path/to/output_directory>"       # Directory to save results
 #     fitting_model: "<gaussian | pseudo_voigt>"      # Choose fitting model
@@ -32,14 +49,9 @@ datasets:
 #       #   peak: <center_q_value>
 #       #   half_width: <half_range_q>
 
-#     single_point_mode: <true | false>               # If true, fits a single mesh point
-#     single_point_index: <mesh_index>                # Index of the point to fit if single_point_mode is true
-#     visuals: <true | false>                         # Generate average intensity plots
-#     extra_pure_image: <true | false>                # Output images without axes/ticks
+  # save_diagnostics: <true | false>                     # Save detailed fit diagnostics for debugging
+  # diagnostic_point_index: <mesh_index>                # Point index to use when diagnostics are enabled
+  # save_interactive_scattering_plot: <true | false>     # Save interactive q / intensity plot (HTML)
+  # save_extra_clean_param_maps: <true | false>           # Save additional param maps without labels/titles/colorbars
 
-#     """
-# #The range must be wide enough to capture a sufficient number of data points (M)
-# # to solve for the model's parameters (N). If the range is too narrow, you will
-# # encounter a "TypeError: ... N must not exceed M=..." because there is not
-# # enough data to perform a meaningful fit.
-# """
+
