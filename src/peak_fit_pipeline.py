@@ -15,6 +15,7 @@ import sys
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
+# Uses non-interactive 'Agg' backend to enable saving fit diagnostic plots without requiring a display
 from matplotlib import pyplot as plt
 from lmfit import Model
 from lmfit.models import PseudoVoigtModel
