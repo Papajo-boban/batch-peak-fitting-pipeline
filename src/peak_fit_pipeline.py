@@ -1,5 +1,7 @@
 """
-peak_fit_pipeline.py
+Author: Tomáš Schuster
+Affiliation: VU Amsterdam, 2025
+
 
 Performs batch peak fitting (Gaussian or Pseudo-Voigt) on 2D mesh spectral data in HDF5 files,
 using a YAML configuration and parallel processing.
@@ -23,10 +25,12 @@ import plotly.graph_objects as go
 
 GAUSSIAN_FIT_PARAM_TAGS = ['cen','amp','wid','const','slope','reduced_chi_sqr','peak_area']
 PSEUDOVOIGT_FIT_PARAM_TAGS = ['center','amplitude','sigma','fraction','reduced_chi_sqr','peak_area']
-'''param tags are specified by the lmfit'''
+"""param tags are specified by the lmfit"""
 ALLOWED_MODELS = ['gaussian', 'pseudo_voigt']
 CHUNK_SIZE = 3000
-
+"""CHUNK_SIZE defines how many mesh points to process per parallel batch.
+Adjust based on available system RAM and CPU cores.
+"""
 
 
 
@@ -56,10 +60,10 @@ class FittingConfig:
         numerator, denominator = map(float, self.aspect_ratio.split('/'))
         self.aspect_ratio = numerator / denominator
 
-        self.enable_diagnostics = config['enable_diagnostics']
-        self.single_point_index = config['single_point_index']
-        self.visuals = config['visuals']
-        self.extra_pure_img = config['extra_pure_image']
+        self.save_diagnostics = config['save_diagnostics']
+        self.diagnostic_point_index = config['diagnostic_point_index']
+        self.save_scatter_plot = config['save_interactive_scattering_plot']
+        self.extra_clean_param_maps = config['save_extra_clean_param_maps']
 
         self.check_file_is_free()
         self.calc_roi_ranges()
@@ -86,45 +90,69 @@ class FittingConfig:
     
     def check_config(self):
         """
-        Handles errors if required fields in config are missing or invalid before fitting begins.
+        Validates the dataset configuration to ensure all fields are present and correctly formatted.
+        Raises informative errors where issues are detected.
         """
+
+        # input_path
         if not isinstance(self.input_path, str) or not self.input_path.endswith('.h5'):
             raise ValueError(f"Invalid input_path: must be a string ending in .h5. Got: {self.input_path}")
         if not os.path.exists(self.input_path):
             raise FileNotFoundError(f"Input path {self.input_path} does not exist.")
 
+        # output_path
         if not isinstance(self.output_path, str):
             raise ValueError("output_path must be a string.")
         if not os.path.exists(self.output_path):
             os.makedirs(self.output_path)
             print(f"Created output directory: {self.output_path}")
 
+        # fitting_model
         if self.model not in ALLOWED_MODELS:
             raise ValueError(f"Invalid fitting_model '{self.model}'. Allowed models are: {ALLOWED_MODELS}.")
 
+        # aspect_ratio
         if isinstance(self.aspect_ratio, str):
             try:
                 numerator, denominator = map(float, self.aspect_ratio.split("/"))
                 if numerator <= 0 or denominator <= 0:
                     raise ValueError
             except Exception:
-                raise ValueError(f"aspect_ratio must be a valid fraction like '1001/301'. Got: {self.aspect_ratio}")
+                raise ValueError(f"aspect_ratio must be a valid fraction like '4/3'. Got: {self.aspect_ratio}")
         elif isinstance(self.aspect_ratio, (int, float)):
             if self.aspect_ratio <= 0:
-                raise ValueError(f"aspect_ratio must be positive. Got: {self.aspect_ratio}")
+                raise ValueError(f"aspect_ratio must be a positive number. Got: {self.aspect_ratio}")
         else:
             raise ValueError("aspect_ratio must be a string (e.g. '4/3') or a positive number.")
 
+        # roi_list
         if not isinstance(self.roi_list, list) or len(self.roi_list) == 0:
             raise ValueError("roi_list must be a non-empty list.")
-
         for i, roi in enumerate(self.roi_list):
             if "name" not in roi or not isinstance(roi["name"], str) or not roi["name"].strip():
                 raise ValueError(f"ROI at index {i} has invalid or missing 'name'.")
             if "peak" not in roi or not isinstance(roi["peak"], (int, float)):
-                raise ValueError(f"ROI '{roi['name']}' has invalid or missing 'peak' value (must be numeric).")
+                raise ValueError(f"ROI '{roi.get('name', f'index {i}')}' has invalid or missing 'peak' (must be numeric).")
             if roi["peak"] > 54 or roi["peak"] < 1:
-                raise ValueError(f"ROI '{roi['name']}' has invalid 'peak' value (must be in range(0,54)).")
+                raise ValueError(f"ROI '{roi['name']}' has 'peak' value out of valid range (1 to 54).")
+            if "half_width" not in roi or not isinstance(roi["half_width"], (int, float)) or roi["half_width"] <= 0:
+                raise ValueError(f"ROI '{roi['name']}' has invalid or missing 'half_width' (must be positive number).")
+        
+        # save_diagnostics
+        if not isinstance(self.save_diagnostics, bool):
+            raise ValueError("save_diagnostics must be a boolean (True or False).")
+
+        # single_point_index
+        if not isinstance(self.diagnostic_point_index, int) or self.diagnostic_point_index < 0:
+            raise ValueError(f"single_point_index must be a non-negative integer. Got: {self.diagnostic_point_index}")
+
+        # visuals
+        if not isinstance(self.save_scatter_plot, bool):
+            raise ValueError("visuals must be a boolean (True or False).")
+
+        # extra_pure_image
+        if not isinstance(self.extra_clean_param_maps, bool):
+            raise ValueError("extra_pure_image must be a boolean (True or False).")
 
 
 class PeakFitFunctions:
@@ -147,11 +175,12 @@ class PeakFitFunctions:
         params = model.make_params()
         return model, params
 
-    def fit_single_point_model(self, i, azim_avg_intensity, q_roi, model, params, model_type, num_points, mesh_shape=None, fit_h5_list=None,roi_list=None, output_path=None, roi_index=None, enable_diagnostics=False):
+    def fit_single_point_model(self, i, azim_avg_intensity, q_roi, model, params, model_type, num_points, mesh_shape=None, fit_h5_list=None,roi_list=None, output_path=None, roi_index=None, save_diagnostics=False):
         """
         Fits a model (Gaussian or Pseudo-Voigt) to a single mesh point.
         Returns: tuple(index, result_values)
         """
+        # Suppress warning for zero standard deviation in flat regions
         warnings.filterwarnings("ignore", message=".*std_dev==0.*")
         self.print_progress(i, num_points)
         intensity_roi = azim_avg_intensity[i, :]
@@ -184,18 +213,18 @@ class PeakFitFunctions:
 
             values.append(value)
 
-            if y is not None and x is not None:
+            if y is not None and x is not None and fit_h5_list and fit_h5_list[roi_index] is not None:
                 fit_h5_list[roi_index][param_idx, y, x] = value
 
-        if enable_diagnostics:
+        if save_diagnostics:
             self.plot_fit_diagnostics(
                 model_type,
                 q_roi=q_roi,
                 raw_data=intensity_roi,
                 fit_result=result,
                 point_idx=i,
-                roi_name=roi_list[roi_index]['name'],
-                save_path=os.path.join(output_path, f"diagnostic_point_{i}_{roi_list[roi_index]['name']}.png")
+                roi_name=roi_list[roi_index]['name'] if roi_list is not None else f"roi_{roi_index}",
+                save_path=os.path.join(output_path, f"diagnostic_point_{i}_{roi_list[roi_index]['name']}.png") if output_path is not None and roi_list is not None and roi_list[roi_index]['name'] is not None else None
             )
 
         return i, tuple(values)
@@ -216,11 +245,10 @@ class PeakFitFunctions:
     def perform_model(self, model_type: str,model,
             azim_avg_intensity, q_roi, fit_h5_list, j, mesh_shape,
             roi_list, dataset_name, scan_no, output_path,
-            params, num_points, extra_pure_img, num_chunks):
+            params, num_points, extra_clean_param_maps, num_chunks):
         """
         Generic peak fitting loop for both Gaussian and Pseudo-Voigt models.
         """
-        # fit_func = self.peak_fit_twobananas if model_type == "gaussian" else self.peak_fit_pseudovoigt
         fit_tags = GAUSSIAN_FIT_PARAM_TAGS if model_type == "gaussian" else PSEUDOVOIGT_FIT_PARAM_TAGS
 
         for chunk_idx in range(num_chunks):
@@ -239,9 +267,11 @@ class PeakFitFunctions:
                 )
                 for i in range(start, end)
             ]
+            # Runs the fitting tasks in parallel using 60 processes.
+            # Note: The optimal number of jobs depends on the system.
+            # On Windows, 60 is the max number of processes
             results_parallel = list(Parallel(n_jobs=60)(tasks))
-
-            self.enumerating(fit_tags, results_parallel, start, j, mesh_shape, fit_h5_list)
+            self.map_results_to_grid(fit_tags, results_parallel, start, j, mesh_shape, fit_h5_list)
             self.plotting_images(
                 fit_param_tags=fit_tags,
                 j=j,
@@ -250,7 +280,7 @@ class PeakFitFunctions:
                 scan_no=scan_no,
                 output_path=output_path,
                 roi_list=roi_list,
-                extra_pure_img=extra_pure_img,
+                extra_clean_param_maps=extra_clean_param_maps,
                 model_type = model_type
             )
 
@@ -268,13 +298,15 @@ class PeakFitFunctions:
         """
         residuals = raw_data - fit_result.best_fit
         chi_sqr = fit_result.chisqr
+        """Tries to retrieve the amplitude, center, and width of the peak from the fit result.
+        These keys may differ depending on the model used (e.g. amp vs. amplitude) so it falls back if the first one is missing."""
         amp = fit_result.best_values.get('amp', fit_result.best_values.get('amplitude', np.nan))
         cen = fit_result.best_values.get('cen', fit_result.best_values.get('center', np.nan))
         wid = fit_result.best_values.get('wid', fit_result.best_values.get('sigma', np.nan))
 
         plt.figure(figsize=(10, 6))
 
-        # --- Fit Plot ---
+        # Fit Plot
         plt.subplot(2, 1, 1)
         plt.plot(q_roi, raw_data, 'bo', label='Raw Data')
         plt.plot(q_roi, fit_result.best_fit, 'r-', label=f'{model_type} Fit')
@@ -284,7 +316,7 @@ class PeakFitFunctions:
         plt.legend()
         plt.grid(True)
 
-        # --- Residuals Plot ---
+        # Residuals Plot
         plt.subplot(2, 1, 2)
         plt.plot(q_roi, residuals, 'k.-', label='Residuals')
         plt.axhline(0, color='gray', linestyle='--')
@@ -303,7 +335,11 @@ class PeakFitFunctions:
 
         plt.close()
 
-    def enumerating(self, fit_param_tags, results_parallel, start, j, mesh_shape, fit_h5_list):
+    def map_results_to_grid(self, fit_param_tags, results_parallel, start, j, mesh_shape, fit_h5_list):
+        """
+        Writes fitted parameter values from parallel results into the corresponding (y, x) positions of the 2D parameter maps. 
+        Uses the global mesh index to correctly locate each point within the mesh grid.
+        """
         for result_idx, result in enumerate(results_parallel):
             global_idx = start + result_idx
             for param_idx in range(len(fit_param_tags)):
@@ -311,15 +347,15 @@ class PeakFitFunctions:
                 fit_h5_list[j][param_idx, y, x] = result[1][param_idx]
 
     def plotting_images(self, fit_param_tags, j, fit_h5_list,
-                        dataset_name, scan_no, output_path, roi_list,extra_pure_img,model_type):
+                        dataset_name, scan_no, output_path, roi_list,extra_clean_param_maps,model_type):
         for k in range(len(fit_param_tags)):
             param_data = fit_h5_list[j][k,:,:]
             plt_title = "%s_%s_%s_%s_%s"%(dataset_name,scan_no,roi_list[j]["name"],model_type,fit_param_tags[k])
             mini = np.percentile(param_data,5)
             maxi = np.percentile(param_data,95)
-            self.save_figure(param_data, plt_title, output_path, mini, maxi,extra_pure_img)
+            self.save_figure(param_data, plt_title, output_path, mini, maxi,extra_clean_param_maps)
 
-    def save_figure(self, param_data, plt_title, output_path, mini, maxi,extra_pure_img):
+    def save_figure(self, param_data, plt_title, output_path, mini, maxi,extra_clean_param_maps):
         # Full version
         plt_fig1_savename = (f"{output_path}/{plt_title}.png")
         fig, ax = plt.subplots(figsize=(30, 6))
@@ -330,8 +366,8 @@ class PeakFitFunctions:
         plt.savefig(plt_fig1_savename)
         plt.close()
         
-        if extra_pure_img:
-            # Pure image
+        if extra_clean_param_maps:
+            # ExtraPure image
             plt_fig2_savename = (f"{output_path}/{plt_title}_pure.png")
             fig2, ax2 = plt.subplots(figsize=(30, 6))
             ax2.imshow(param_data, vmin=mini, vmax=maxi, aspect='auto')
@@ -380,7 +416,7 @@ class PeakFitExecutor:
         self.output_file = h5py.File(self.output_file_name,'w')
         self.init_fit_dataset()
 
-        if self.cfg.visuals: 
+        if self.cfg.save_scatter_plot: 
             self.show_visuals()
 
         else: self.process_all_rois_for_scan()
@@ -401,11 +437,12 @@ class PeakFitExecutor:
         for start in range(0, num_rows, CHUNK_SIZE):
             end = min(start + CHUNK_SIZE, num_rows)
             print(f"Processing rows {start} to {end}")
-            data_chunk = self.intensity[start:end, :, :]
+            intensity_np = np.array(self.intensity)
+            data_chunk = np.array(intensity_np[start:end, :, :])
             chunk_sum = np.sum(data_chunk, axis=(0, 1))
             intensity_sum += chunk_sum
 
-        intensity_avg = intensity_sum / (self.intensity.shape[0] * self.intensity.shape[1])
+        intensity_avg = intensity_sum / (intensity_np.shape[0] * intensity_np.shape[1])
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=self.q, y=intensity_avg, mode='lines+markers', name='Average Intensity'))
@@ -422,19 +459,6 @@ class PeakFitExecutor:
         html_output_path = os.path.join(self.cfg.output_path, f"{self.cfg.dataset_name}_scan{self.scan_no}_azimuthal_avg.html")
         fig.write_html(html_output_path)
         print(f"Saved interactive diffraction pattern to: {html_output_path}")
-
-
-        #intensity over chi graph
-        sample_point = 0  # or any point from 0 to 5999
-        q_index = 100     # select a representative q value
-        chi_vector = self.intensity[sample_point, :, q_index]
-
-        plt.plot(chi_vector)
-        plt.title("Intensity vs chi for fixed q")
-        plt.xlabel("Chi index")
-        plt.ylabel("Intensity")
-        plt.grid(True)
-        plt.show()
     
     def get_scan_num(self):
         with h5py.File(self.cfg.input_path, 'r') as f:
@@ -446,8 +470,11 @@ class PeakFitExecutor:
 
     def get_inputs(self):
         f =h5py.File(self.path,'r+')
-        
-        self.intensity =  (f[f"/{self.scan_no}/eiger_integrate/integrated/intensity"])
+        """
+        At this point, intensity is still not converted to np.array()
+        to avoid overloading RAM when working with large datasets.
+        """
+        self.intensity = f[f"/{self.scan_no}/eiger_integrate/integrated/intensity"]
         self.num_points = self.intensity.shape[0] 
         
         self.q = np.array(f[f"/{self.scan_no}/eiger_integrate/integrated/q"])
@@ -486,15 +513,16 @@ class PeakFitExecutor:
             self.get_roi_range(j)
             print("Preparing data for fitting...\n")
             
-            azim_avg_intensity = np.add.reduce(self.intensity[:,:,self.start_idx:self.end_idx], axis=1) / self.intensity.shape[1]
+            intensity_np = np.array(self.intensity)
+            azim_avg_intensity = np.add.reduce(intensity_np[:, :, self.start_idx:self.end_idx], axis=1) / intensity_np.shape[1]
             
             model, params = self.pf.init_model(self.cfg.model, self.roi_list, j)
 
-            if self.cfg.enable_diagnostics:
-                print(f"Running single-point mode at index {self.cfg.single_point_index} for ROI '{self.roi_list[j]['name']}'")
+            if self.cfg.save_diagnostics:
+                print(f"Running single-point mode at index {self.cfg.diagnostic_point_index} for ROI '{self.roi_list[j]['name']}'")
 
                 self.pf.fit_single_point_model(
-                    i=self.cfg.single_point_index,
+                    i=self.cfg.diagnostic_point_index,
                     azim_avg_intensity=azim_avg_intensity,
                     q_roi=self.q_roi,
                     model=model,
@@ -506,7 +534,7 @@ class PeakFitExecutor:
                     roi_list=self.roi_list,
                     output_path=self.cfg.output_path,
                     roi_index=j,
-                    enable_diagnostics=self.cfg.enable_diagnostics
+                    save_diagnostics=self.cfg.save_diagnostics
                 )
 
             else:
@@ -528,7 +556,7 @@ class PeakFitExecutor:
                     output_path=self.cfg.output_path,
                     params=params,
                     num_points=self.num_points,
-                    extra_pure_img=self.cfg.extra_pure_img,
+                    extra_clean_param_maps=self.cfg.extra_clean_param_maps,
                     num_chunks=num_chunks
                 )
 
@@ -536,11 +564,9 @@ class PeakFitExecutor:
 if __name__ == "__main__":
     multi_config = MultiFittingConfig("config.yaml")
     print("-"*46)
-    from joblib import cpu_count
-    print(f"cpu count: {cpu_count()}")
     print("Number of datasets to process:", len(multi_config.configs))
-    for config in multi_config.configs:
-        print(f"Processing dataset {multi_config.configs.index(config) + 1}/{len(multi_config.configs)}")
+    for idx, config in enumerate(multi_config.configs, start=1):
+        print(f"Processing dataset {idx}/{len(multi_config.configs)}")
         peak_functions = PeakFitFunctions()
         fitter = PeakFitExecutor(config, peak_functions)
         fitter.run()
